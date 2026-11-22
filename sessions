@@ -13,6 +13,8 @@
 # <host> of "localhost" (or the current hostname) runs tmux directly,
 # no SSH. Default host: $SESSIONS_HOST, else localhost.
 # Set a different default in your shell rc:  export SESSIONS_HOST=gateway0
+#
+# Colors are on when stdout is a TTY. Set NO_COLOR=1 to force plain output.
 
 set -euo pipefail
 
@@ -52,6 +54,24 @@ run_tmux() {
   fi
 }
 
+# ---- colors ---------------------------------------------------------------
+# ANSI escapes, blanked when stdout isn't a TTY or NO_COLOR is set. Using
+# $'\e[...m' literals so there's no runtime subshell per draw.
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  C_RESET=$'\e[0m'
+  C_BOLD=$'\e[1m'
+  C_DIM=$'\e[2m'
+  C_RED=$'\e[31m'
+  C_GREEN=$'\e[32m'
+  C_YELLOW=$'\e[33m'
+  C_BLUE=$'\e[34m'
+  C_CYAN=$'\e[36m'
+  C_GRAY=$'\e[90m'
+else
+  C_RESET=""; C_BOLD=""; C_DIM=""
+  C_RED=""; C_GREEN=""; C_YELLOW=""; C_BLUE=""; C_CYAN=""; C_GRAY=""
+fi
+
 # ---- helpers --------------------------------------------------------------
 human_ago() {
   # unix-ts -> "5m ago", "2h ago", "3d ago", "never" for 0
@@ -64,6 +84,13 @@ human_ago() {
   elif (( diff < 86400 )); then printf "%dh ago" $(( diff / 3600 ))
   else                         printf "%dd ago" $(( diff / 86400 ))
   fi
+}
+
+# Repeat a single character N times.
+repeat_char() {
+  local char="$1" n="$2" out=""
+  while (( n > 0 )); do out+="$char"; (( n-- )); done
+  printf '%s' "$out"
 }
 
 # Returns rows: name|created|last_attached|attached
@@ -79,30 +106,83 @@ list_sessions() {
   local rows
   rows=$(fetch_sessions)
   SESSION_NAMES=()
+
+  # Header banner, same for both empty and populated cases.
+  printf '\n  %s%sSessions on %s%s%s\n\n' \
+    "$C_BOLD" "$C_CYAN" "$HOST" "$C_RESET" ""
+
   if [[ -z "$rows" ]]; then
-    echo "No sessions on $HOST."
+    printf '  %s(no sessions)%s\n' "$C_DIM" "$C_RESET"
     return 1
   fi
-  printf "%-4s %-20s %-18s %-18s %s\n" "#" "NAME" "STARTED" "LAST CONNECTED" "STATE"
-  printf "%-4s %-20s %-18s %-18s %s\n" "---" "----" "-------" "--------------" "-----"
-  local i=1 name created last_att attached
+
+  # Pass 1: parse rows into parallel arrays and compute column widths.
+  # The "● " / "○ " glyph is one display column but up to three bytes;
+  # ${#str} in a UTF-8 locale counts characters, which is what we want.
+  local -a names=() starteds=() lasts=() states=() state_colors=()
+  local w_num=1 w_name=4 w_started=7 w_last=9 w_state=10
+  local i=1 name created last_att attached started_h last_h state state_color
   while IFS='|' read -r name created last_att attached; do
     [[ -z "$name" ]] && continue
     SESSION_NAMES[i]="$name"
-    local state="detached"
-    [[ "$attached" == "1" ]] && state="attached"
-    printf "%-4s %-20s %-18s %-18s %s\n" "$i" "$name" "$(human_ago "$created")" "$(human_ago "$last_att")" "$state"
+    started_h=$(human_ago "$created")
+    last_h=$(human_ago "$last_att")
+    if [[ "$attached" == "1" ]]; then
+      state="● attached"
+      state_color="$C_GREEN"
+    else
+      state="○ detached"
+      state_color="$C_DIM"
+    fi
+    names[i]="$name"
+    starteds[i]="$started_h"
+    lasts[i]="$last_h"
+    states[i]="$state"
+    state_colors[i]="$state_color"
+    (( ${#i}         > w_num     )) && w_num=${#i}
+    (( ${#name}      > w_name    )) && w_name=${#name}
+    (( ${#started_h} > w_started )) && w_started=${#started_h}
+    (( ${#last_h}    > w_last    )) && w_last=${#last_h}
+    (( ${#state}     > w_state   )) && w_state=${#state}
     (( i++ )) || true
   done <<< "$rows"
+  local n=$(( i - 1 ))
+
+  # Column headers (dim, uppercase).
+  printf '  %s%*s   %-*s   %-*s   %-*s   %-*s%s\n' \
+    "$C_DIM" \
+    "$w_num" "#" \
+    "$w_name" "NAME" \
+    "$w_started" "STARTED" \
+    "$w_last" "LAST USED" \
+    "$w_state" "STATE" \
+    "$C_RESET"
+
+  # Separator — one '─' per character under each column, joined by spaces
+  # matching the header's inter-column spacing (three spaces = three dashes
+  # rendered as '─' so the line reads as continuous).
+  local sep="$(repeat_char '─' "$w_num")───$(repeat_char '─' "$w_name")───$(repeat_char '─' "$w_started")───$(repeat_char '─' "$w_last")───$(repeat_char '─' "$w_state")"
+  printf '  %s%s%s\n' "$C_GRAY" "$sep" "$C_RESET"
+
+  # Data rows.
+  local k
+  for k in $(seq 1 "$n"); do
+    printf '  %s%*s%s   %s%-*s%s   %s%-*s%s   %s%-*s%s   %s%-*s%s\n' \
+      "$C_CYAN"  "$w_num"     "$k"             "$C_RESET" \
+      "$C_BOLD"  "$w_name"    "${names[k]}"    "$C_RESET" \
+      "$C_DIM"   "$w_started" "${starteds[k]}" "$C_RESET" \
+      "$C_DIM"   "$w_last"    "${lasts[k]}"    "$C_RESET" \
+      "${state_colors[k]}" "$w_state" "${states[k]}" "$C_RESET"
+  done
   return 0
 }
 
 # Interactive prompt for host + name + working dir, then create.
 prompt_new_session() {
   local nh nm nd
-  read -r -p "host [$HOST]: " nh
+  read -r -p "$(printf '  %shost%s [%s]: ' "$C_CYAN" "$C_RESET" "$HOST")" nh
   nh="${nh:-$HOST}"
-  read -r -p "name (blank = auto): " nm
+  read -r -p "$(printf '  %sname%s (blank = auto): ' "$C_CYAN" "$C_RESET")" nm
   # -e enables readline for editing + Tab completion. `set -o emacs` is
   # required because in a non-interactive shell line editing is off, and
   # `bind` silently has no effect until it's on. After that, the three
@@ -113,7 +193,7 @@ prompt_new_session() {
   bind 'TAB:complete' 2>/dev/null || true
   bind 'set show-all-if-ambiguous on' 2>/dev/null || true
   bind 'set completion-ignore-case on' 2>/dev/null || true
-  read -r -e -p "working directory (blank = home): " nd
+  read -r -e -p "$(printf '  %sdir%s  (blank = home): ' "$C_CYAN" "$C_RESET")" nd
   # Expand a leading '~' to $HOME (bash's `read` leaves it literal).
   [[ -n "$nd" ]] && nd="${nd/#\~/$HOME}"
   new_session "$nm" "$nh" "$nd"
@@ -121,7 +201,10 @@ prompt_new_session() {
 
 attach_by_name() {
   local name="$1" host="${2:-$HOST}"
-  echo "Attaching to '$name' on $host..."
+  printf '  %s→%s Connecting to %s%s%s on %s%s%s...\n' \
+    "$C_CYAN" "$C_RESET" \
+    "$C_BOLD" "$name" "$C_RESET" \
+    "$C_BOLD" "$host" "$C_RESET"
   run_tmux --tty "$host" attach -t "$name"
 }
 
@@ -131,23 +214,49 @@ new_session() {
     name="work-$(date +%Y%m%d-%H%M%S)"
   fi
   if [[ -n "$dir" ]]; then
-    echo "Starting '$name' on $host (cwd: $dir)..."
+    printf '  %s+%s Starting %s%s%s on %s%s%s (cwd: %s%s%s)...\n' \
+      "$C_GREEN" "$C_RESET" \
+      "$C_BOLD" "$name" "$C_RESET" \
+      "$C_BOLD" "$host" "$C_RESET" \
+      "$C_DIM"  "$dir"  "$C_RESET"
     run_tmux --tty "$host" new -A -s "$name" -c "$dir"
   else
-    echo "Starting '$name' on $host..."
+    printf '  %s+%s Starting %s%s%s on %s%s%s...\n' \
+      "$C_GREEN" "$C_RESET" \
+      "$C_BOLD" "$name" "$C_RESET" \
+      "$C_BOLD" "$host" "$C_RESET"
     run_tmux --tty "$host" new -A -s "$name"
   fi
 }
 
 kill_by_name() {
   local name="$1" host="${2:-$HOST}"
-  run_tmux "$host" kill-session -t "$name" && echo "Killed '$name' on $host."
+  if run_tmux "$host" kill-session -t "$name"; then
+    printf '  %s✕%s Killed %s%s%s on %s%s%s.\n' \
+      "$C_RED" "$C_RESET" \
+      "$C_BOLD" "$name" "$C_RESET" \
+      "$C_BOLD" "$host" "$C_RESET"
+  fi
 }
 
 # ---- menu mode ------------------------------------------------------------
+# One compact hint line, colored, with bullets separating actions. Written
+# out rather than looped so the spacing stays even.
+menu_hint() {
+  local last="$1"
+  printf '  %sConnect%s %s1-%s%s  %s•%s  %s(n)ew%s  %s•%s  %s(d #)%s kill  %s•%s  %s(q)%s quit\n' \
+    "$C_DIM"  "$C_RESET" \
+    "$C_CYAN" "$last" "$C_RESET" \
+    "$C_GRAY" "$C_RESET" \
+    "$C_CYAN" "$C_RESET" \
+    "$C_GRAY" "$C_RESET" \
+    "$C_CYAN" "$C_RESET" \
+    "$C_GRAY" "$C_RESET" \
+    "$C_CYAN" "$C_RESET"
+}
+
 menu_loop() {
   while true; do
-    echo
     local has_sessions=0
     if list_sessions; then
       has_sessions=1
@@ -156,7 +265,7 @@ menu_loop() {
 
     if [[ $has_sessions -eq 0 ]]; then
       # No sessions exist — the only offer is to create one.
-      read -r -p "Create a new session? [Y/n] " yn
+      read -r -p "$(printf '  %sCreate a new session?%s [Y/n] ' "$C_BOLD" "$C_RESET")" yn
       case "$yn" in
         n|N|no|No) exit 0 ;;
         *)         prompt_new_session; continue ;;
@@ -166,8 +275,8 @@ menu_loop() {
     # SESSION_NAMES is 1-indexed and tightly packed (no gaps), so its length
     # equals the highest valid index.
     local last=${#SESSION_NAMES[@]}
-    echo "Connect to # (1-$last) or [n]ew session?  (d <#> delete, q quit)"
-    read -r -p "> " input || { echo; exit 0; }
+    menu_hint "$last"
+    read -r -p "$(printf '  %s❯%s ' "$C_CYAN$C_BOLD" "$C_RESET")" input || { echo; exit 0; }
     case "$input" in
       q|quit|exit) exit 0 ;;
       ""|n|N|new) prompt_new_session ;;
@@ -182,10 +291,10 @@ menu_loop() {
       d\ *|kill\ *)
         local num="${input#* }"
         if [[ "$num" =~ ^[0-9]+$ ]] && [[ -n "${SESSION_NAMES[num]:-}" ]]; then
-          read -r -p "kill '${SESSION_NAMES[num]}'? [y/N] " yn
+          read -r -p "$(printf '  %s✕%s kill %s%s%s? [y/N] ' "$C_RED" "$C_RESET" "$C_BOLD" "${SESSION_NAMES[num]}" "$C_RESET")" yn
           [[ "$yn" =~ ^[Yy]$ ]] && kill_by_name "${SESSION_NAMES[num]}"
         else
-          echo "no such session number: $num"
+          printf '  %sno such session number: %s%s\n' "$C_RED" "$num" "$C_RESET"
         fi
         ;;
       *)
@@ -193,7 +302,7 @@ menu_loop() {
           attach_by_name "${SESSION_NAMES[input]}"
           # After detach, loop again
         else
-          echo "unrecognized: $input"
+          printf '  %sunrecognized: %s%s\n' "$C_RED" "$input" "$C_RESET"
         fi
         ;;
     esac
