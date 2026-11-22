@@ -33,7 +33,13 @@ curl -fsSL .../install.sh | INSTALL_DIR=/usr/local/bin sudo bash
 
 # Install for a different user (requires root)
 curl -fsSL .../install.sh | sudo TARGET_USER=alice bash
+
+# Also add a short alias to your shell rc (bash/zsh/fish detected automatically)
+curl -fsSL .../install.sh | ALIAS=s bash
 ```
+
+The alias append is idempotent — running the installer twice doesn't
+duplicate the line.
 
 ## Usage
 

@@ -12,6 +12,8 @@
 #   RAW_BASE      raw file base URL            (default: GitHub raw for jgruber/sessions)
 #   SKIP_TMUX     set to 1 to skip tmux install
 #   TARGET_USER   install for this user instead of $USER (requires root or sudo)
+#   ALIAS         if set, add 'alias <ALIAS>=sessions' to the target user's
+#                 shell rc (bash/zsh/fish auto-detected). Example: ALIAS=s
 
 set -euo pipefail
 
@@ -107,6 +109,56 @@ install_script() {
   fi
 }
 
+# --- optional alias install ----------------------------------------------
+install_alias() {
+  local name="${ALIAS:-}"
+  [[ -z "$name" ]] && return 0
+
+  if ! [[ "$name" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+    die "invalid ALIAS name: '$name' (must match [a-zA-Z_][a-zA-Z0-9_]*)"
+  fi
+
+  # Pick shell: for cross-user installs, consult passwd; otherwise $SHELL.
+  local target_shell
+  if [[ -n "${TARGET_USER:-}" ]] && [[ "$TARGET_USER" != "${USER:-$(id -un)}" ]]; then
+    target_shell="$(getent passwd "$TARGET_USER" | cut -d: -f7)"
+  else
+    target_shell="${SHELL:-/bin/bash}"
+  fi
+  target_shell="$(basename "$target_shell")"
+
+  local rc
+  case "$target_shell" in
+    bash) rc="$TARGET_HOME/.bashrc" ;;
+    zsh)  rc="$TARGET_HOME/.zshrc"  ;;
+    fish) rc="$TARGET_HOME/.config/fish/config.fish" ;;
+    *)
+      say "unknown shell '$target_shell' — skipping alias install"
+      say "add this to your rc manually:  alias $name=sessions"
+      return 0
+      ;;
+  esac
+
+  mkdir -p "$(dirname "$rc")"
+  touch "$rc"
+
+  # Idempotent: match "alias NAME=sessions" with optional trailing comment.
+  if grep -Eq "^[[:space:]]*alias[[:space:]]+${name}=sessions([[:space:]]|$)" "$rc"; then
+    say "alias '$name' already present in $rc"
+  else
+    {
+      printf '\n# added by sessions installer\n'
+      printf 'alias %s=sessions\n' "$name"
+    } >> "$rc"
+    say "Added 'alias $name=sessions' to $rc"
+    say "Start a new shell, or run:  source $rc"
+  fi
+
+  if [[ -n "${TARGET_USER:-}" ]] && [[ "$TARGET_USER" != "${USER:-$(id -un)}" ]]; then
+    chown "$TARGET_USER" "$rc" 2>/dev/null || true
+  fi
+}
+
 # --- PATH check -----------------------------------------------------------
 path_hint() {
   # Only meaningful when installing for the current user
@@ -132,5 +184,6 @@ EOF
 
 install_tmux
 install_script
+install_alias
 say "Installed. Run:  sessions"
 path_hint
