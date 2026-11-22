@@ -67,8 +67,12 @@ install_tmux() {
       $SUDO apt-get install -y tmux
       ;;
     *" arch "*|*" archlinux "*|*" manjaro "*|*" endeavouros "*)
-      say "Installing tmux via pacman..."
-      $SUDO pacman -Sy --noconfirm --needed tmux
+      say "Installing tmux via pacman (full system sync, per Arch recommendation)..."
+      # Arch does not support partial upgrades: 'pacman -Sy pkg' can break
+      # the system when pkg depends on libs newer than those currently
+      # installed. '-Syu' refreshes the database and upgrades everything,
+      # which is the only safe way to install a new package non-interactively.
+      $SUDO pacman -Syu --noconfirm tmux
       ;;
     *" fedora "*|*" rhel "*|*" centos "*|*" rocky "*|*" almalinux "*|*" ol "*)
       if command -v dnf >/dev/null 2>&1; then
