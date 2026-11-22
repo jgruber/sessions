@@ -163,7 +163,7 @@ menu_loop() {
 # ---- dispatch -------------------------------------------------------------
 case "$CMD" in
   menu)    menu_loop ;;
-  ls)      list_sessions ;;
+  ls)      list_sessions || true ;;
   new)     new_session "${1:-}" ;;
   attach)  [[ $# -ge 1 ]] || { echo "usage: sessions $HOST attach <name>" >&2; exit 2; }
            attach_by_name "$1" ;;
