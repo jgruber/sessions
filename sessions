@@ -103,11 +103,13 @@ prompt_new_session() {
   read -r -p "host [$HOST]: " nh
   nh="${nh:-$HOST}"
   read -r -p "name (blank = auto): " nm
-  # -e enables readline for editing + Tab completion. The explicit TAB bind
-  # is required because bash in non-interactive scripts doesn't inherit the
-  # interactive-shell default binding. Tab completes against the LOCAL
-  # filesystem — type absolute paths for remote hosts whose layout doesn't
-  # mirror local.
+  # -e enables readline for editing + Tab completion. `set -o emacs` is
+  # required because in a non-interactive shell line editing is off, and
+  # `bind` silently has no effect until it's on. After that, the three
+  # binds configure TAB for filename completion against the LOCAL
+  # filesystem — type absolute paths for remote hosts whose layout
+  # doesn't mirror local.
+  set -o emacs
   bind 'TAB:complete' 2>/dev/null || true
   bind 'set show-all-if-ambiguous on' 2>/dev/null || true
   bind 'set completion-ignore-case on' 2>/dev/null || true
