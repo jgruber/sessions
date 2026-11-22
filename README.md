@@ -81,7 +81,11 @@ Connect to # (1-3) or [n]ew session?  (d <#> delete, q quit)
 - Type **n** (or just Enter) to create a new session. You'll be prompted for:
   - **host** (defaults to the current scope, e.g. `localhost`)
   - **name** (blank → auto-named with a timestamp)
-  - **working directory** (blank → shell's home dir)
+  - **working directory** (blank → shell's home dir). Readline is on at this
+    prompt — arrow keys to edit, Tab to complete filenames, and a leading
+    `~` is expanded to `$HOME`. Tab completes against the *local*
+    filesystem, which is right for localhost sessions; for remote hosts
+    whose paths don't mirror the local box, type an absolute path.
 - Type **d <number>** to kill a session (with confirmation).
 - Type **q** to quit.
 
