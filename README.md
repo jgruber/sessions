@@ -44,12 +44,13 @@ duplicate the line.
 ## Usage
 
 ```
-sessions                     interactive menu on default host (localhost)
-sessions <host>              interactive menu on <host> (via SSH)
-sessions <host> ls           list sessions, non-interactive
-sessions <host> new [name]   create a session (named or auto) and attach
-sessions <host> attach name  attach to an existing session
-sessions <host> kill name    kill a session
+sessions                          interactive menu on default host (localhost)
+sessions <host>                   interactive menu on <host> (via SSH)
+sessions <host> ls                list sessions, non-interactive
+sessions <host> new [name] [dir]  create a session (named or auto) with an
+                                  optional starting directory, and attach
+sessions <host> attach name       attach to an existing session
+sessions <host> kill name         kill a session
 ```
 
 `<host>` of `localhost` (or the current machine's hostname) talks to tmux
@@ -64,26 +65,34 @@ export SESSIONS_HOST=gateway0
 
 ## Interactive menu
 
+**When sessions exist:**
+
 ```
 #    NAME                 STARTED            LAST CONNECTED     STATE
 ---  ----                 -------            --------------     -----
 1    work                 2h ago             just now           attached
 2    email                3d ago             1h ago             detached
 3    compile              30m ago            never              detached
-0    [new session]
 
-[number] attach   0 new   d <number> kill   q quit
+Connect to # (1-3) or [n]ew session?  (d <#> delete, q quit)
 ```
 
-- Type a **number** to attach to that session.
-- Type **0** (or `n`) to create a new session — you'll be prompted for a host
-  (defaults to the current scope, e.g. `localhost`) and a name (blank → auto).
-  Shortcut form: `n build @gateway0`.
+- Type a **number** to connect to that session.
+- Type **n** (or just Enter) to create a new session. You'll be prompted for:
+  - **host** (defaults to the current scope, e.g. `localhost`)
+  - **name** (blank → auto-named with a timestamp)
+  - **working directory** (blank → shell's home dir)
 - Type **d <number>** to kill a session (with confirmation).
 - Type **q** to quit.
 
-If there are no sessions on the host, `sessions` proactively offers to create
-one before dropping to the menu.
+Shortcut form at the prompt: `n build @gateway0` — create "build" on gateway0.
+
+**When no sessions exist**, only the create option is offered:
+
+```
+No sessions on localhost.
+Create a new session? [Y/n]
+```
 
 After you detach with `Ctrl-b d`, you land back in the menu — pick the number
 again to reconnect.

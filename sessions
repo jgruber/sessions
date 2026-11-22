@@ -5,7 +5,8 @@
 #   sessions                     interactive menu on default host
 #   sessions <host>              interactive menu on <host>
 #   sessions <host> ls           list sessions, non-interactive
-#   sessions <host> new [name]   create a session (named or auto) and attach
+#   sessions <host> new [name] [dir]  create a session (named or auto) with
+#                                     optional starting directory, then attach
 #   sessions <host> attach name  attach to an existing session
 #   sessions <host> kill name    kill a session
 #
@@ -96,13 +97,14 @@ list_sessions() {
   return 0
 }
 
-# Interactive prompt for host + name, then create.
+# Interactive prompt for host + name + working dir, then create.
 prompt_new_session() {
-  local nh nm
+  local nh nm nd
   read -r -p "host [$HOST]: " nh
   nh="${nh:-$HOST}"
   read -r -p "name (blank = auto): " nm
-  new_session "$nm" "$nh"
+  read -r -p "working directory (blank = home): " nd
+  new_session "$nm" "$nh" "$nd"
 }
 
 attach_by_name() {
@@ -112,12 +114,17 @@ attach_by_name() {
 }
 
 new_session() {
-  local name="${1:-}" host="${2:-$HOST}"
+  local name="${1:-}" host="${2:-$HOST}" dir="${3:-}"
   if [[ -z "$name" ]]; then
     name="work-$(date +%Y%m%d-%H%M%S)"
   fi
-  echo "Starting '$name' on $host..."
-  run_tmux --tty "$host" new -A -s "$name"
+  if [[ -n "$dir" ]]; then
+    echo "Starting '$name' on $host (cwd: $dir)..."
+    run_tmux --tty "$host" new -A -s "$name" -c "$dir"
+  else
+    echo "Starting '$name' on $host..."
+    run_tmux --tty "$host" new -A -s "$name"
+  fi
 }
 
 kill_by_name() {
@@ -129,23 +136,29 @@ kill_by_name() {
 menu_loop() {
   while true; do
     echo
+    local has_sessions=0
     if list_sessions; then
-      echo "0    [new session]"
-    else
-      # No sessions — proactively offer to create one.
-      read -r -p "Create a new session? [Y/n] " yn
-      case "$yn" in
-        ""|y|Y|yes) prompt_new_session; continue ;;
-      esac
+      has_sessions=1
     fi
     echo
-    echo "[number] attach   0 new   d <number> kill   q quit"
+
+    if [[ $has_sessions -eq 0 ]]; then
+      # No sessions exist — the only offer is to create one.
+      read -r -p "Create a new session? [Y/n] " yn
+      case "$yn" in
+        n|N|no|No) exit 0 ;;
+        *)         prompt_new_session; continue ;;
+      esac
+    fi
+
+    # SESSION_NAMES is 1-indexed and tightly packed (no gaps), so its length
+    # equals the highest valid index.
+    local last=${#SESSION_NAMES[@]}
+    echo "Connect to # (1-$last) or [n]ew session?  (d <#> delete, q quit)"
     read -r -p "> " input || { echo; exit 0; }
     case "$input" in
-      ""|q|quit|exit) exit 0 ;;
-      0|n|new)
-        prompt_new_session
-        ;;
+      q|quit|exit) exit 0 ;;
+      ""|n|N|new) prompt_new_session ;;
       n\ *|new\ *)
         # shortcut form:  n [name] [@host]
         local rest="${input#* }" nm="" nh="$HOST"
@@ -179,7 +192,7 @@ menu_loop() {
 case "$CMD" in
   menu)    menu_loop ;;
   ls)      list_sessions || true ;;
-  new)     new_session "${1:-}" ;;
+  new)     new_session "${1:-}" "$HOST" "${2:-}" ;;
   attach)  [[ $# -ge 1 ]] || { echo "usage: sessions $HOST attach <name>" >&2; exit 2; }
            attach_by_name "$1" ;;
   kill)    [[ $# -ge 1 ]] || { echo "usage: sessions $HOST kill <name>" >&2; exit 2; }
