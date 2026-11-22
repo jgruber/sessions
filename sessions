@@ -103,7 +103,17 @@ prompt_new_session() {
   read -r -p "host [$HOST]: " nh
   nh="${nh:-$HOST}"
   read -r -p "name (blank = auto): " nm
-  read -r -p "working directory (blank = home): " nd
+  # -e enables readline for editing + Tab completion. The explicit TAB bind
+  # is required because bash in non-interactive scripts doesn't inherit the
+  # interactive-shell default binding. Tab completes against the LOCAL
+  # filesystem — type absolute paths for remote hosts whose layout doesn't
+  # mirror local.
+  bind 'TAB:complete' 2>/dev/null || true
+  bind 'set show-all-if-ambiguous on' 2>/dev/null || true
+  bind 'set completion-ignore-case on' 2>/dev/null || true
+  read -r -e -p "working directory (blank = home): " nd
+  # Expand a leading '~' to $HOME (bash's `read` leaves it literal).
+  [[ -n "$nd" ]] && nd="${nd/#\~/$HOME}"
   new_session "$nm" "$nh" "$nd"
 }
 
