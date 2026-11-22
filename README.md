@@ -70,16 +70,20 @@ export SESSIONS_HOST=gateway0
 1    work                 2h ago             just now           attached
 2    email                3d ago             1h ago             detached
 3    compile              30m ago            never              detached
+0    [new session]
 
-[number] attach   n [name] new   d <number> kill   q quit
+[number] attach   0 new   d <number> kill   q quit
 ```
 
 - Type a **number** to attach to that session.
-- Type **n** to create a new session — you'll be prompted for a host
+- Type **0** (or `n`) to create a new session — you'll be prompted for a host
   (defaults to the current scope, e.g. `localhost`) and a name (blank → auto).
   Shortcut form: `n build @gateway0`.
 - Type **d <number>** to kill a session (with confirmation).
 - Type **q** to quit.
+
+If there are no sessions on the host, `sessions` proactively offers to create
+one before dropping to the menu.
 
 After you detach with `Ctrl-b d`, you land back in the menu — pick the number
 again to reconnect.
