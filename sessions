@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# sessions — friendly tmux session manager, local or over SSH
+#
+# Usage:
+#   sessions                     interactive menu on default host
+#   sessions <host>              interactive menu on <host>
+#   sessions <host> ls           list sessions, non-interactive
+#   sessions <host> new [name]   create a session (named or auto) and attach
+#   sessions <host> attach name  attach to an existing session
+#   sessions <host> kill name    kill a session
+#
+# <host> of "localhost" (or the current hostname) runs tmux directly,
+# no SSH. Default host: $SESSIONS_HOST, else localhost.
+# Set a different default in your shell rc:  export SESSIONS_HOST=gateway0
+
+set -euo pipefail
+
+DEFAULT_HOST="${SESSIONS_HOST:-localhost}"
+
+# ---- arg parsing ----------------------------------------------------------
+# First positional may be a host OR a subcommand. If it's a subcommand, host
+# defaults. Subcommands: ls, new, attach, kill.
+SUBCMDS="ls new attach kill"
+
+if [[ $# -eq 0 ]]; then
+  HOST="$DEFAULT_HOST"; CMD="menu"; set --
+elif [[ " $SUBCMDS " == *" $1 "* ]]; then
+  HOST="$DEFAULT_HOST"; CMD="$1"; shift
+else
+  HOST="$1"; shift
+  if [[ $# -eq 0 ]]; then CMD="menu"; else CMD="$1"; shift; fi
+fi
+
+is_local() {
+  [[ "$1" == "localhost" || "$1" == "127.0.0.1" || "$1" == "$(hostname)" || "$1" == "$(hostname -s)" ]]
+}
+
+# run_tmux [--tty] <host> <tmux-args...>
+# Runs tmux locally if host is this machine, otherwise ssh's. --tty allocates
+# a controlling tty (needed for attach/new).
+run_tmux() {
+  local tty=""
+  [[ "$1" == "--tty" ]] && { tty="t"; shift; }
+  local host="$1"; shift
+  if is_local "$host"; then
+    tmux "$@"
+  elif [[ -n "$tty" ]]; then
+    ssh -t "$host" tmux "$@"
+  else
+    ssh "$host" tmux "$@"
+  fi
+}
+
+# ---- helpers --------------------------------------------------------------
+human_ago() {
+  # unix-ts -> "5m ago", "2h ago", "3d ago", "never" for 0
+  local ts="$1" now diff
+  [[ "$ts" == "0" || -z "$ts" ]] && { printf "never"; return; }
+  now=$(date +%s)
+  diff=$(( now - ts ))
+  if   (( diff < 60   )); then printf "just now"
+  elif (( diff < 3600 )); then printf "%dm ago" $(( diff / 60 ))
+  elif (( diff < 86400 )); then printf "%dh ago" $(( diff / 3600 ))
+  else                         printf "%dd ago" $(( diff / 86400 ))
+  fi
+}
+
+# Returns rows: name|created|last_attached|attached
+fetch_sessions() {
+  local host="${1:-$HOST}"
+  run_tmux "$host" ls -F '#{session_name}|#{session_created}|#{session_last_attached}|#{session_attached}' 2>/dev/null || true
+}
+
+# Print numbered table. Sets global SESSION_NAMES array with names by index.
+SESSION_NAMES=()
+list_sessions() {
+  local rows
+  rows=$(fetch_sessions)
+  if [[ -z "$rows" ]]; then
+    echo "No sessions on $HOST."
+    return 1
+  fi
+  printf "%-4s %-20s %-18s %-18s %s\n" "#" "NAME" "STARTED" "LAST CONNECTED" "STATE"
+  printf "%-4s %-20s %-18s %-18s %s\n" "---" "----" "-------" "--------------" "-----"
+  local i=1 name created last_att attached
+  SESSION_NAMES=()
+  while IFS='|' read -r name created last_att attached; do
+    [[ -z "$name" ]] && continue
+    SESSION_NAMES[i]="$name"
+    local state="detached"
+    [[ "$attached" == "1" ]] && state="attached"
+    printf "%-4s %-20s %-18s %-18s %s\n" "$i" "$name" "$(human_ago "$created")" "$(human_ago "$last_att")" "$state"
+    (( i++ )) || true
+  done <<< "$rows"
+  return 0
+}
+
+attach_by_name() {
+  local name="$1" host="${2:-$HOST}"
+  echo "Attaching to '$name' on $host..."
+  run_tmux --tty "$host" attach -t "$name"
+}
+
+new_session() {
+  local name="${1:-}" host="${2:-$HOST}"
+  if [[ -z "$name" ]]; then
+    name="work-$(date +%Y%m%d-%H%M%S)"
+  fi
+  echo "Starting '$name' on $host..."
+  run_tmux --tty "$host" new -A -s "$name"
+}
+
+kill_by_name() {
+  local name="$1" host="${2:-$HOST}"
+  run_tmux "$host" kill-session -t "$name" && echo "Killed '$name' on $host."
+}
+
+# ---- menu mode ------------------------------------------------------------
+menu_loop() {
+  while true; do
+    echo
+    list_sessions || true
+    echo
+    echo "[number] attach   n [name] new   d <number> kill   q quit"
+    read -r -p "> " input || { echo; exit 0; }
+    case "$input" in
+      ""|q|quit|exit) exit 0 ;;
+      n|new)
+        read -r -p "host [$HOST]: " nh
+        nh="${nh:-$HOST}"
+        read -r -p "name (blank = auto): " nm
+        new_session "$nm" "$nh"
+        ;;
+      n\ *|new\ *)
+        # shortcut form:  n [name] [@host]
+        local rest="${input#* }" nm="" nh="$HOST"
+        for tok in $rest; do
+          if [[ "$tok" == @* ]]; then nh="${tok#@}"; else nm="$tok"; fi
+        done
+        new_session "$nm" "$nh"
+        ;;
+      d\ *|kill\ *)
+        local num="${input#* }"
+        if [[ "$num" =~ ^[0-9]+$ ]] && [[ -n "${SESSION_NAMES[num]:-}" ]]; then
+          read -r -p "kill '${SESSION_NAMES[num]}'? [y/N] " yn
+          [[ "$yn" =~ ^[Yy]$ ]] && kill_by_name "${SESSION_NAMES[num]}"
+        else
+          echo "no such session number: $num"
+        fi
+        ;;
+      *)
+        if [[ "$input" =~ ^[0-9]+$ ]] && [[ -n "${SESSION_NAMES[input]:-}" ]]; then
+          attach_by_name "${SESSION_NAMES[input]}"
+          # After detach, loop again
+        else
+          echo "unrecognized: $input"
+        fi
+        ;;
+    esac
+  done
+}
+
+# ---- dispatch -------------------------------------------------------------
+case "$CMD" in
+  menu)    menu_loop ;;
+  ls)      list_sessions ;;
+  new)     new_session "${1:-}" ;;
+  attach)  [[ $# -ge 1 ]] || { echo "usage: sessions $HOST attach <name>" >&2; exit 2; }
+           attach_by_name "$1" ;;
+  kill)    [[ $# -ge 1 ]] || { echo "usage: sessions $HOST kill <name>" >&2; exit 2; }
+           kill_by_name "$1" ;;
+  *)       echo "unknown subcommand: $CMD" >&2; exit 2 ;;
+esac
