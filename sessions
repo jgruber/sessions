@@ -103,12 +103,7 @@ prompt_new_session() {
   read -r -p "host [$HOST]: " nh
   nh="${nh:-$HOST}"
   read -r -p "name (blank = auto): " nm
-  # -e enables readline: arrow keys, line editing, and Tab filename completion
-  # against the LOCAL filesystem (fine for localhost; type absolute paths for
-  # remote hosts where local paths don't mirror the remote).
-  read -r -e -p "working directory (blank = home): " nd
-  # Expand a leading '~' to $HOME (bash's `read` leaves it literal).
-  [[ -n "$nd" ]] && nd="${nd/#\~/$HOME}"
+  read -r -p "working directory (blank = home): " nd
   new_session "$nm" "$nh" "$nd"
 }
 
