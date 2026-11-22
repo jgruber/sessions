@@ -72,10 +72,12 @@ fetch_sessions() {
 }
 
 # Print numbered table. Sets global SESSION_NAMES array with names by index.
+# Returns 0 if any sessions were listed, 1 if none.
 SESSION_NAMES=()
 list_sessions() {
   local rows
   rows=$(fetch_sessions)
+  SESSION_NAMES=()
   if [[ -z "$rows" ]]; then
     echo "No sessions on $HOST."
     return 1
@@ -83,7 +85,6 @@ list_sessions() {
   printf "%-4s %-20s %-18s %-18s %s\n" "#" "NAME" "STARTED" "LAST CONNECTED" "STATE"
   printf "%-4s %-20s %-18s %-18s %s\n" "---" "----" "-------" "--------------" "-----"
   local i=1 name created last_att attached
-  SESSION_NAMES=()
   while IFS='|' read -r name created last_att attached; do
     [[ -z "$name" ]] && continue
     SESSION_NAMES[i]="$name"
@@ -93,6 +94,15 @@ list_sessions() {
     (( i++ )) || true
   done <<< "$rows"
   return 0
+}
+
+# Interactive prompt for host + name, then create.
+prompt_new_session() {
+  local nh nm
+  read -r -p "host [$HOST]: " nh
+  nh="${nh:-$HOST}"
+  read -r -p "name (blank = auto): " nm
+  new_session "$nm" "$nh"
 }
 
 attach_by_name() {
@@ -119,17 +129,22 @@ kill_by_name() {
 menu_loop() {
   while true; do
     echo
-    list_sessions || true
+    if list_sessions; then
+      echo "0    [new session]"
+    else
+      # No sessions — proactively offer to create one.
+      read -r -p "Create a new session? [Y/n] " yn
+      case "$yn" in
+        ""|y|Y|yes) prompt_new_session; continue ;;
+      esac
+    fi
     echo
-    echo "[number] attach   n [name] new   d <number> kill   q quit"
+    echo "[number] attach   0 new   d <number> kill   q quit"
     read -r -p "> " input || { echo; exit 0; }
     case "$input" in
       ""|q|quit|exit) exit 0 ;;
-      n|new)
-        read -r -p "host [$HOST]: " nh
-        nh="${nh:-$HOST}"
-        read -r -p "name (blank = auto): " nm
-        new_session "$nm" "$nh"
+      0|n|new)
+        prompt_new_session
         ;;
       n\ *|new\ *)
         # shortcut form:  n [name] [@host]
