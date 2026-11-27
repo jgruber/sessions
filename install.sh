@@ -14,6 +14,10 @@
 #   TARGET_USER   install for this user instead of $USER (requires root or sudo)
 #   ALIAS         if set, add 'alias <ALIAS>=sessions' to the target user's
 #                 shell rc (bash/zsh/fish auto-detected). Example: ALIAS=s
+#   TMUX_CONF     1 = install ~/.tmux.conf from this repo's tmux.conf.
+#                 Won't overwrite an existing file unless FORCE_TMUX_CONF=1.
+#   FIX_OSC3008   1 = append the systemd OSC 3008 no-op snippet to the
+#                 target user's bash rc (bashrc-osc3008.sh). Idempotent.
 
 set -euo pipefail
 
@@ -159,6 +163,62 @@ install_alias() {
   fi
 }
 
+# --- optional terminal-setup bundles --------------------------------------
+# Two gotchas that only matter once you're using sessions:
+#   1. Fresh bash login shells (which tmux spawns) can print systemd's OSC
+#      3008 shell-integration bytes as visible garbage in terminals that
+#      don't speak OSC 3008 yet.
+#   2. tmux's default is to use the terminal's alternate screen and a 2000-
+#      line history, so terminal scroll-up doesn't work inside a session.
+# Both opt in via env var so default install touches no config files.
+
+install_osc3008_fix() {
+  [[ "${FIX_OSC3008:-0}" == "1" ]] || return 0
+  local rc="$TARGET_HOME/.bashrc"
+  touch "$rc"
+  if grep -q '__systemd_osc_context_precmdline() { :;' "$rc"; then
+    say "OSC 3008 no-op already present in $rc"
+    return 0
+  fi
+  {
+    printf '\n# added by sessions installer: silence systemd OSC 3008 shell-integration\n'
+    printf '# (see /etc/profile.d/80-systemd-osc-context.sh)\n'
+    printf 'if declare -F __systemd_osc_context_precmdline >/dev/null 2>&1; then\n'
+    printf '  __systemd_osc_context_precmdline() { :; }\n'
+    printf '  __systemd_osc_context_ps0()        { :; }\n'
+    printf 'fi\n'
+  } >> "$rc"
+  say "Added OSC 3008 no-op to $rc"
+  if [[ -n "${TARGET_USER:-}" ]] && [[ "$TARGET_USER" != "${USER:-$(id -un)}" ]]; then
+    chown "$TARGET_USER" "$rc" 2>/dev/null || true
+  fi
+}
+
+install_tmux_conf() {
+  [[ "${TMUX_CONF:-0}" == "1" ]] || return 0
+  local dest="$TARGET_HOME/.tmux.conf"
+  if [[ -e "$dest" ]] && [[ "${FORCE_TMUX_CONF:-0}" != "1" ]]; then
+    say "$dest exists; not overwriting. Pass FORCE_TMUX_CONF=1 to replace it."
+    return 0
+  fi
+  local tmp
+  tmp="$(mktemp)"
+  say "Downloading tmux.conf -> $dest"
+  curl -fsSL "$RAW_BASE/tmux.conf" -o "$tmp"
+  mv "$tmp" "$dest"
+  if [[ -n "${TARGET_USER:-}" ]] && [[ "$TARGET_USER" != "${USER:-$(id -un)}" ]]; then
+    chown "$TARGET_USER" "$dest" 2>/dev/null || true
+  fi
+  # Reload a running server, if the target user has one.
+  if command -v tmux >/dev/null 2>&1; then
+    local reload_cmd=(tmux source-file "$dest")
+    if [[ -n "${TARGET_USER:-}" ]] && [[ "$TARGET_USER" != "${USER:-$(id -un)}" ]]; then
+      reload_cmd=(sudo -u "$TARGET_USER" tmux source-file "$dest")
+    fi
+    "${reload_cmd[@]}" 2>/dev/null && say "Reloaded running tmux server"
+  fi
+}
+
 # --- PATH check -----------------------------------------------------------
 path_hint() {
   # Only meaningful when installing for the current user
@@ -185,5 +245,7 @@ EOF
 install_tmux
 install_script
 install_alias
+install_tmux_conf
+install_osc3008_fix
 say "Installed. Run:  sessions"
 path_hint

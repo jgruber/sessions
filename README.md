@@ -36,6 +36,14 @@ curl -fsSL .../install.sh | sudo TARGET_USER=alice bash
 
 # Also add a short alias to your shell rc (bash/zsh/fish detected automatically)
 curl -fsSL .../install.sh | ALIAS=s bash
+
+# Install the bundled ~/.tmux.conf (mouse scrollback, 50k history limit)
+curl -fsSL .../install.sh | TMUX_CONF=1 bash
+# Overwrite an existing ~/.tmux.conf too:  TMUX_CONF=1 FORCE_TMUX_CONF=1 bash
+
+# Silence systemd's OSC 3008 shell-integration bytes in ~/.bashrc
+# (fixes the "garbage characters at the top of a fresh tmux pane")
+curl -fsSL .../install.sh | FIX_OSC3008=1 bash
 ```
 
 The alias append is idempotent — running the installer twice doesn't
@@ -100,6 +108,56 @@ Create a new session? [Y/n]
 
 After you detach with `Ctrl-b d`, you land back in the menu — pick the number
 again to reconnect.
+
+## Terminal setup bundles
+
+Two gotchas you only notice once you're using `sessions`, bundled here so
+they live next to the tool that exposes them. Both opt in via `install.sh`
+env var or you can drop the files in by hand.
+
+### `tmux.conf` — mouse scrollback and a 50k history
+
+Vanilla tmux captures the terminal's alternate screen, so scroll-up in your
+SSH client does nothing inside a session. The shipped `~/.tmux.conf` turns
+mouse mode on (wheel enters copy-mode and scrolls tmux's own history),
+bumps the history limit from tmux's default 2000 lines to 50000, and binds
+**Alt+PageUp** to jump straight into copy-mode scrolled up. Shift+drag still
+selects text at the terminal level if you want to copy across the tmux
+boundary.
+
+```sh
+curl -fsSL .../install.sh | TMUX_CONF=1 bash
+#   FORCE_TMUX_CONF=1    overwrite an existing ~/.tmux.conf
+```
+
+Or drop [`tmux.conf`](tmux.conf) at `~/.tmux.conf` yourself. Reload a live
+server with `tmux source-file ~/.tmux.conf`.
+
+### `bashrc-osc3008.sh` — silence the "garbage in new tmux panes"
+
+On systemd ≥ 256 (Ubuntu 26.04, Debian trixie, Fedora 40+)
+`/etc/profile.d/80-systemd-osc-context.sh` hooks every bash prompt to emit
+**OSC 3008 "Hierarchical Context Signalling"** (UAPI.15,
+<https://uapi-group.org/specifications/specs/osc_context/>) bytes like:
+
+```
+\e]3008;start=<uuid>;type=shell;machineid=...;cwd=/path\e\
+```
+
+Terminals that already speak OSC 3008 swallow it; most don't yet, so the
+payload prints as visible junk at the top of every fresh tmux pane (and
+stray fragments can even land back in bash as "command not found").
+
+The snippet redefines the two systemd shell-integration functions as no-ops
+without touching `PROMPT_COMMAND` or `PS0` (so pyenv/nvm hooks keep working):
+
+```sh
+curl -fsSL .../install.sh | FIX_OSC3008=1 bash
+```
+
+Or append [`bashrc-osc3008.sh`](bashrc-osc3008.sh) to your `~/.bashrc` by
+hand. For a system-wide fix (requires root), the systemd script itself
+tells you how at the top of the file.
 
 ## Why not screen / byobu / zellij?
 
